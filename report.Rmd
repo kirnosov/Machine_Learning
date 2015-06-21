@@ -1,13 +1,17 @@
 ---
-title: Practical Machine Learning Project Report
-author: N. Kirnosov
+title: "Practical Machine Learning Project Report"
+author: "N. Kirnosov"
 output:
-html_document:
-fig_height: 10
-fig_width: 10
+  pdf_document:
+    toc: yes
+  html_document:
+    css: custom.css
+    keep_md: yes
+    toc: yes
 ---
         
-## Introduction  
+### Introduction  
+
 Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible 
 to collect a large amount of data about personal activity relatively inexpensively. 
 These type of devices are part of the quantified self movement – a group of 
@@ -20,16 +24,17 @@ In this project, we will use data from accelerometers on the belt, forearm,
 arm, and dumbell of 6 participants to predict the manner in which they 
 did the exercise.  
 
-## Libraries Used
+### Libraries Used
+
 ```{r, message=FALSE, hide=TRUE}
 library(caret)
-library(rpart)
-library(rpart.plot)
 library(randomForest)
 library(corrplot)
 library(doMC)
 ```
+
 ### Download the Data
+
 ```{r, cache = TRUE}
 trainUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
 testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
@@ -45,17 +50,33 @@ if (!file.exists(testFile)) {
         download.file(testUrl, destfile=testFile, method="curl")
 }
 ```  
+
 ### Read the Data
-After downloading the data from the data source, we can read the two csv files into two data frames.  
+
+After the data is downloaded, let us read training data set first.
+
 ```{r, cache = T}
 rawTrainVal <- read.csv("./data/pml-training.csv")
-rawTest <- read.csv("./data/pml-testing.csv")
 ```
-The training data set contains 19622 observations and 160 variables, while the testing data set contains 20 observations and 160 variables. The "classe" variable in the training set is the outcome to predict. 
+
+These data will be used for model training and validation.
+Since there are not too many data, the split is 90% training and 10% validation.
+
+```{r}
+set.seed(1)
+inTrain <- createDataPartition(rawTrainVal$classe, p=0.90, list=FALSE)
+rawTrain <- rawTrainVal[inTrain, ]
+rawVal <- rawTrainVal[-inTrain, ]
+```
 
 ### Preprocess the Data
 
-```{r, cache=TRUE}
+In order to make the model training easier, we will try to avoid oversampling 
+and eliminate all the data which has low prediction value. 
+To start with, we will identify "good" columns and eliminate all the "bad"
+columns from the training data set.
+
+```{r}
 Good_Columns <- function(rawData){
         v <- which(lapply(rawData, class) %in% "numeric")
         rawData <- rawData[,v]
@@ -64,6 +85,16 @@ Good_Columns <- function(rawData){
         return(names(rawData))
 }
 
+goodCols <- Good_Columns(rawTrain)
+cleanTrain <- subset(rawTrain,select = goodCols)
+```
+
+Next, we will preprocess the training data and eliminate near-zero variables.
+
+```{r, cache=TRUE}
+preData <-preProcess(cleanTrain,
+                     method=c('knnImpute', 'center', 'scale'))
+
 Prep_Data <- function(cleanData,preData){
         prepData <- predict(preData, cleanData)
         v <- nearZeroVar(prepData,saveMetrics=TRUE)
@@ -71,26 +102,13 @@ Prep_Data <- function(cleanData,preData){
         return(prepData)
 }
 
-set.seed(1)
-inTrain <- createDataPartition(rawTrainVal$classe, p=0.90, list=F)
-rawTrain <- rawTrainVal[inTrain, ]
-rawVal <- rawTrainVal[-inTrain, ]
-
-goodCols <- Good_Columns(rawTrain)
-cleanTrain <- subset(rawTrain,select = goodCols)
-preData <-preProcess(cleanTrain,
-                     method=c('knnImpute', 'center', 'scale'))
-
 prepTrain <- Prep_Data(cleanTrain,preData)
 prepTrain$classe <- rawTrain$classe
-
-prepVal <- Prep_Data(subset(rawVal,select = goodCols),preData)
-prepVal$classe <- rawVal$classe
-
-prepTest <- Prep_Data(subset(rawTest,select = goodCols),preData)
 ```
 
 ### Model Training
+
+Now we can build a predictive model for activity recognition using Random Forest algorithm. We will use 10-fold cross validation when applying the algorithm.
 
 ```{r, cache=TRUE}
 registerDoMC()
@@ -98,22 +116,59 @@ registerDoMC()
 RFmodel <- train(classe ~., method="rf", data=prepTrain, 
                 trControl=trainControl(method='cv'), 
                 number=10, allowParallel=TRUE)
+RFmodel
 ```
 
-```{r}
-TrainPred <- predict(RFmodel, prepTrain)
-confusionMatrix(TrainPred, prepTrain$classe)
-```
+### Model Validation
+
+We can use the remaining 10% of the training data to validate the model.
 
 ```{r}
+prepVal <- Prep_Data(subset(rawVal,select = goodCols),preData)
+prepVal$classe <- rawVal$classe
 ValPred <- predict(RFmodel, prepVal)
-confusionMatrix(ValPred, prepVal$classe)
+CM <- confusionMatrix(ValPred, prepVal$classe)
+CM
 ```
 
+```{r, echo=FALSE}
+percent <- function(x, digits = 2, format = "f", ...) {
+  paste0(formatC(100 * x, format = format, digits = digits, ...), "%")
+}
+```
+The estimated accuracy of the model is `r percent(CM$overall[1])`
+and the *out of sample error* is `r percent(1-CM$overall[1])`
+
+### Making a Prediction
+
+Now we can apply the model to make predictions for the testing data.
+
 ```{r}
+prepTest <- Prep_Data(subset(read.csv("./data/pml-testing.csv"),
+                             select = goodCols),preData)
 testingPred <- predict(RFmodel, prepTest)
 testingPred
 ```
 
-```{r}
+```{r, echo=FALSE}
+pml_write_files = function(x){
+        if (!file.exists("./answers")) {
+                dir.create("./answers")
+        }
+        n = length(x)
+        for(i in 1:n){
+                filename = paste0("answers/problem_id_",i,".txt")
+                write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,
+                            col.names=FALSE)
+        }
+}
+pml_write_files(testingPred)
+```
+
+### Appendix
+
+Correlation Matrix
+```{r, echo=FALSE}
+corrPlot <- cor(prepTrain[, -length(names(prepTrain))])
+corrplot(corrPlot, method="color")
 ```
