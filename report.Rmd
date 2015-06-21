@@ -21,12 +21,13 @@ arm, and dumbell of 6 participants to predict the manner in which they
 did the exercise.  
 
 ## Libraries Used
-```{r, cache = TRUE, message=FALSE, hide=TRUE}
+```{r, message=FALSE, hide=TRUE}
 library(caret)
 library(rpart)
 library(rpart.plot)
 library(randomForest)
 library(corrplot)
+library(doMC)
 ```
 ### Download the Data
 ```{r, cache = TRUE}
@@ -47,9 +48,72 @@ if (!file.exists(testFile)) {
 ### Read the Data
 After downloading the data from the data source, we can read the two csv files into two data frames.  
 ```{r, cache = T}
-trainRaw <- read.csv("./data/pml-training.csv")
-testRaw <- read.csv("./data/pml-testing.csv")
-dim(trainRaw)
-dim(testRaw)
+rawTrainVal <- read.csv("./data/pml-training.csv")
+rawTest <- read.csv("./data/pml-testing.csv")
 ```
 The training data set contains 19622 observations and 160 variables, while the testing data set contains 20 observations and 160 variables. The "classe" variable in the training set is the outcome to predict. 
+
+### Preprocess the Data
+
+```{r, cache=TRUE}
+Good_Columns <- function(rawData){
+        v <- which(lapply(rawData, class) %in% "numeric")
+        rawData <- rawData[,v]
+        v <- apply(rawData,2,function(x) {sum(is.na(x))}) 
+        rawData <- rawData[,which(v == 0)]
+        return(names(rawData))
+}
+
+Prep_Data <- function(cleanData,preData){
+        prepData <- predict(preData, cleanData)
+        v <- nearZeroVar(prepData,saveMetrics=TRUE)
+        prepData <- prepData[,v$nzv==FALSE]
+        return(prepData)
+}
+
+set.seed(1)
+inTrain <- createDataPartition(rawTrainVal$classe, p=0.90, list=F)
+rawTrain <- rawTrainVal[inTrain, ]
+rawVal <- rawTrainVal[-inTrain, ]
+
+goodCols <- Good_Columns(rawTrain)
+cleanTrain <- subset(rawTrain,select = goodCols)
+preData <-preProcess(cleanTrain,
+                     method=c('knnImpute', 'center', 'scale'))
+
+prepTrain <- Prep_Data(cleanTrain,preData)
+prepTrain$classe <- rawTrain$classe
+
+prepVal <- Prep_Data(subset(rawVal,select = goodCols),preData)
+prepVal$classe <- rawVal$classe
+
+prepTest <- Prep_Data(subset(rawTest,select = goodCols),preData)
+```
+
+### Model Training
+
+```{r, cache=TRUE}
+registerDoMC()
+
+RFmodel <- train(classe ~., method="rf", data=prepTrain, 
+                trControl=trainControl(method='cv'), 
+                number=10, allowParallel=TRUE)
+```
+
+```{r}
+TrainPred <- predict(RFmodel, prepTrain)
+confusionMatrix(TrainPred, prepTrain$classe)
+```
+
+```{r}
+ValPred <- predict(RFmodel, prepVal)
+confusionMatrix(ValPred, prepVal$classe)
+```
+
+```{r}
+testingPred <- predict(RFmodel, prepTest)
+testingPred
+```
+
+```{r}
+```

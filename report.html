@@ -77,7 +77,8 @@ img {
 library(rpart)
 library(rpart.plot)
 library(randomForest)
-library(corrplot)</code></pre>
+library(corrplot)
+library(doMC)</code></pre>
 <div id="download-the-data" class="section level3">
 <h3>Download the Data</h3>
 <pre class="r"><code>trainUrl &lt;-&quot;https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv&quot;
@@ -97,13 +98,122 @@ if (!file.exists(testFile)) {
 <div id="read-the-data" class="section level3">
 <h3>Read the Data</h3>
 <p>After downloading the data from the data source, we can read the two csv files into two data frames.</p>
-<pre class="r"><code>trainRaw &lt;- read.csv(&quot;./data/pml-training.csv&quot;)
-testRaw &lt;- read.csv(&quot;./data/pml-testing.csv&quot;)
-dim(trainRaw)</code></pre>
-<pre><code>## [1] 19622   160</code></pre>
-<pre class="r"><code>dim(testRaw)</code></pre>
-<pre><code>## [1]  20 160</code></pre>
+<pre class="r"><code>rawTrainVal &lt;- read.csv(&quot;./data/pml-training.csv&quot;)
+rawTest &lt;- read.csv(&quot;./data/pml-testing.csv&quot;)</code></pre>
 <p>The training data set contains 19622 observations and 160 variables, while the testing data set contains 20 observations and 160 variables. The “classe” variable in the training set is the outcome to predict.</p>
+</div>
+<div id="preprocess-the-data" class="section level3">
+<h3>Preprocess the Data</h3>
+<pre class="r"><code>Good_Columns &lt;- function(rawData){
+        v &lt;- which(lapply(rawData, class) %in% &quot;numeric&quot;)
+        rawData &lt;- rawData[,v]
+        v &lt;- apply(rawData,2,function(x) {sum(is.na(x))}) 
+        rawData &lt;- rawData[,which(v == 0)]
+        return(names(rawData))
+}
+
+Prep_Data &lt;- function(cleanData,preData){
+        prepData &lt;- predict(preData, cleanData)
+        v &lt;- nearZeroVar(prepData,saveMetrics=TRUE)
+        prepData &lt;- prepData[,v$nzv==FALSE]
+        return(prepData)
+}
+
+set.seed(1)
+inTrain &lt;- createDataPartition(rawTrainVal$classe, p=0.90, list=F)
+rawTrain &lt;- rawTrainVal[inTrain, ]
+rawVal &lt;- rawTrainVal[-inTrain, ]
+
+goodCols &lt;- Good_Columns(rawTrain)
+cleanTrain &lt;- subset(rawTrain,select = goodCols)
+preData &lt;-preProcess(cleanTrain,
+                     method=c('knnImpute', 'center', 'scale'))
+
+prepTrain &lt;- Prep_Data(cleanTrain,preData)
+prepTrain$classe &lt;- rawTrain$classe
+
+prepVal &lt;- Prep_Data(subset(rawVal,select = goodCols),preData)
+prepVal$classe &lt;- rawVal$classe
+
+prepTest &lt;- Prep_Data(subset(rawTest,select = goodCols),preData)</code></pre>
+</div>
+<div id="model-training" class="section level3">
+<h3>Model Training</h3>
+<pre class="r"><code>registerDoMC()
+
+RFmodel &lt;- train(classe ~., method=&quot;rf&quot;, data=prepTrain, 
+                trControl=trainControl(method='cv'), 
+                number=10, allowParallel=TRUE)</code></pre>
+<pre class="r"><code>TrainPred &lt;- predict(RFmodel, prepTrain)
+confusionMatrix(TrainPred, prepTrain$classe)</code></pre>
+<pre><code>## Confusion Matrix and Statistics
+## 
+##           Reference
+## Prediction    A    B    C    D    E
+##          A 5022    0    0    0    0
+##          B    0 3418    0    0    0
+##          C    0    0 3080    0    0
+##          D    0    0    0 2895    0
+##          E    0    0    0    0 3247
+## 
+## Overall Statistics
+##                                      
+##                Accuracy : 1          
+##                  95% CI : (0.9998, 1)
+##     No Information Rate : 0.2843     
+##     P-Value [Acc &gt; NIR] : &lt; 2.2e-16  
+##                                      
+##                   Kappa : 1          
+##  Mcnemar's Test P-Value : NA         
+## 
+## Statistics by Class:
+## 
+##                      Class: A Class: B Class: C Class: D Class: E
+## Sensitivity            1.0000   1.0000   1.0000   1.0000   1.0000
+## Specificity            1.0000   1.0000   1.0000   1.0000   1.0000
+## Pos Pred Value         1.0000   1.0000   1.0000   1.0000   1.0000
+## Neg Pred Value         1.0000   1.0000   1.0000   1.0000   1.0000
+## Prevalence             0.2843   0.1935   0.1744   0.1639   0.1838
+## Detection Rate         0.2843   0.1935   0.1744   0.1639   0.1838
+## Detection Prevalence   0.2843   0.1935   0.1744   0.1639   0.1838
+## Balanced Accuracy      1.0000   1.0000   1.0000   1.0000   1.0000</code></pre>
+<pre class="r"><code>ValPred &lt;- predict(RFmodel, prepVal)
+confusionMatrix(ValPred, prepVal$classe)</code></pre>
+<pre><code>## Confusion Matrix and Statistics
+## 
+##           Reference
+## Prediction   A   B   C   D   E
+##          A 557   2   0   0   0
+##          B   1 377   1   0   0
+##          C   0   0 338   1   0
+##          D   0   0   3 320   0
+##          E   0   0   0   0 360
+## 
+## Overall Statistics
+##                                          
+##                Accuracy : 0.9959         
+##                  95% CI : (0.992, 0.9982)
+##     No Information Rate : 0.2847         
+##     P-Value [Acc &gt; NIR] : &lt; 2.2e-16      
+##                                          
+##                   Kappa : 0.9948         
+##  Mcnemar's Test P-Value : NA             
+## 
+## Statistics by Class:
+## 
+##                      Class: A Class: B Class: C Class: D Class: E
+## Sensitivity            0.9982   0.9947   0.9883   0.9969   1.0000
+## Specificity            0.9986   0.9987   0.9994   0.9982   1.0000
+## Pos Pred Value         0.9964   0.9947   0.9971   0.9907   1.0000
+## Neg Pred Value         0.9993   0.9987   0.9975   0.9994   1.0000
+## Prevalence             0.2847   0.1934   0.1745   0.1638   0.1837
+## Detection Rate         0.2842   0.1923   0.1724   0.1633   0.1837
+## Detection Prevalence   0.2852   0.1934   0.1730   0.1648   0.1837
+## Balanced Accuracy      0.9984   0.9967   0.9938   0.9975   1.0000</code></pre>
+<pre class="r"><code>testingPred &lt;- predict(RFmodel, prepTest)
+testingPred</code></pre>
+<pre><code>##  [1] B A B A A E D B A A B C B A E E A B B B
+## Levels: A B C D E</code></pre>
 </div>
 </div>
 
